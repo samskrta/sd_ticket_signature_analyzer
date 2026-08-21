@@ -7,6 +7,9 @@ tech emailed each ticket image:
 
     8/7/26 12:24: SZ there 8/7 FRI, ... O-emld tckt [Tckts\\605070a.png] ...
 
+Also records the customer ("NAME · STREET") per job so the review app can line up
+repeat customers' signatures across visits and techs.
+
 Precedence per ticket variant:
   1. work_history line that names the exact Tckts\\NNNNNNx.png file  (exact)
   2. appointment order — variant 'a' = 1st appointment, 'b' = 2nd, ...  (inferred)
@@ -54,22 +57,37 @@ def load_db_url() -> str:
     return url
 
 
-def fetch_sd(url: str, invoices: list[int]) -> tuple[dict[str, str], dict[int, list[str]]]:
+def customer_key(name: str | None, street: str | None) -> str | None:
+    """'BELGER, SUSAN   PreAuthLimit $450' + '14501 OUTLOOK ST [120*166]' -> 'BELGER, SUSAN · 14501 OUTLOOK ST'."""
+    name = re.sub(r"\s{2,}.*$", "", (name or "").strip()).upper()      # drop trailing notes after a double space
+    street = re.sub(r"\[.*?\]", "", street or "").strip().upper()       # drop [map-grid] tags
+    street = re.sub(r"\s+", " ", street)
+    return f"{name} · {street}" if name and street else None
+
+
+def fetch_sd(url: str, invoices: list[int]) -> tuple[dict[str, str], dict[int, list[str]], dict[int, str]]:
     """
     Returns:
       ticket_tech:  {"605070a": "SZ"} from work_history lines
       appt_techs:   {605070: ["JY", "SZ"]} in appointment date order
+      customers:    {605070: "BELGER, SUSAN · 14501 OUTLOOK ST"}
     """
     lo, hi = min(invoices), max(invoices)
     ticket_tech: dict[str, str] = {}
     appt_techs: dict[int, list[str]] = defaultdict(list)
+    customers: dict[int, str] = {}
     with psycopg.connect(url) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT invoice_number, work_history FROM jobs "
-            "WHERE invoice_number BETWEEN %s AND %s AND work_history LIKE '%%Tckts%%'",
+            "SELECT invoice_number, work_history, location_name, location_street, payer_name, payer_street "
+            "FROM jobs WHERE invoice_number BETWEEN %s AND %s",
             (lo, hi),
         )
-        for _inv, history in cur:
+        for inv, history, loc_name, loc_street, payer_name, payer_street in cur:
+            # location_* is only filled when it differs from the payer (e.g. warranty jobs:
+            # payer = manufacturer, location = homeowner); otherwise the payer is the customer.
+            c = customer_key(loc_name, loc_street) or customer_key(payer_name, payer_street)
+            if c:
+                customers[inv] = c
             for line in (history or "").splitlines():
                 tickets = TCKT_RX.findall(line)
                 if not tickets:
@@ -87,7 +105,7 @@ def fetch_sd(url: str, invoices: list[int]) -> tuple[dict[str, str], dict[int, l
         )
         for inv, tech in cur:
             appt_techs[inv].append(tech.upper())
-    return ticket_tech, appt_techs
+    return ticket_tech, appt_techs, customers
 
 
 def resolve(keys, ticket_tech, appt_techs):
@@ -116,8 +134,9 @@ def main():
     invoices = sorted({int(t) for _, t, _ in keys})
     console.print(f"[blue]{len(keys)} records, {len(invoices)} invoices ({invoices[0]}–{invoices[-1]})[/blue]")
 
-    ticket_tech, appt_techs = fetch_sd(load_db_url(), invoices)
-    console.print(f"[dim]SD: {len(ticket_tech)} ticket images in work_history, {len(appt_techs)} jobs with appointments[/dim]")
+    ticket_tech, appt_techs, customers = fetch_sd(load_db_url(), invoices)
+    console.print(f"[dim]SD: {len(ticket_tech)} ticket images in work_history, {len(appt_techs)} jobs with appointments, "
+                  f"{len(customers)} jobs with a customer[/dim]")
 
     assignments = list(resolve(keys, ticket_tech, appt_techs))
     sources = Counter(src for *_, src in assignments)
@@ -139,6 +158,9 @@ def main():
         return
     db.assign_technicians([(p, c, n) for p, c, n, _ in assignments])
     console.print(f"[green]✓ Assigned technician on {len(assignments)} records[/green]")
+    cust_rows = [(str(inv), customers[inv]) for inv in invoices if inv in customers]
+    db.assign_customers(cust_rows)
+    console.print(f"[green]✓ Assigned customer on {len(cust_rows)} jobs[/green]")
 
 
 if __name__ == "__main__":

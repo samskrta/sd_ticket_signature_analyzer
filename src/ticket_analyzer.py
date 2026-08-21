@@ -6,8 +6,18 @@ import re
 
 from PIL import Image
 import io
+import numpy as np
 import pytesseract
 from src.tech_names import normalize_tech_name
+
+# Signature region as fractions of the page (keep in sync with review_app.py SIG_* constants)
+SIG_LEFT, SIG_RIGHT = 0.01, 0.68
+SIG_TOP, SIG_BOTTOM = 0.77, 0.94
+# Printed "by [Tech] [Role]" block inside that region, masked before measuring ink
+NAME_TOP, NAME_BOTTOM, NAME_RIGHT = 0.785, 0.815, 0.30
+DARK_THRESHOLD = 170          # grayscale value below which a pixel counts as ink
+SIG_MIN_DENSITY = 0.006       # less ink than this = no signature
+SIG_MAX_DENSITY = 0.06        # more than this = something other than a signature is in the box
 
 
 @dataclass
@@ -195,46 +205,27 @@ class TicketAnalyzer:
         img = Image.open(io.BytesIO(image_bytes))
         width, height = img.size
         
-        # Signature region: BELOW the "by [Tech Name]" line
-        # Tech name is at ~76-78% down, signature starts at ~82%
-        # Only check left side (avoid payment info on right)
-        # Exclude very bottom (legal text if present)
-        
-        sig_left = 10
-        sig_right = int(width * 0.45)  # Left side only
-        sig_top = int(height * 0.82)   # Well below "by [Name]" line
-        sig_bottom = int(height * 0.94)  # Above footer
-        
-        if sig_bottom <= sig_top:
+        # Signature area of the form (two layouts, 1004/1012 px tall): the "by [Tech]" rule
+        # is at 78.5–79.1% of the height, the signature baseline at 93.5–94.3%, and the
+        # "Total Ticket" box starts at ~70% of the width. Signatures routinely ride up over
+        # the name line, so the region starts above it and the printed name is masked out.
+        a = np.array(img.convert("L"))
+        top, bottom = int(height * SIG_TOP), int(height * SIG_BOTTOM)
+        left, right = int(width * SIG_LEFT), int(width * SIG_RIGHT)
+        if bottom <= top or right <= left:
             return False, 0.5
-        
-        # Crop to signature region (below tech name)
-        sig_region = img.crop((sig_left, sig_top, sig_right, sig_bottom))
-        
-        # Convert to grayscale
-        sig_gray = sig_region.convert("L")
-        pixels = list(sig_gray.getdata())
-        
-        if not pixels:
-            return False, 0.5
-        
-        # Count dark pixels (ink marks)
-        dark_threshold = 170
-        dark_pixels = sum(1 for p in pixels if p < dark_threshold)
-        ink_density = dark_pixels / len(pixels)
-        
-        # Signature detection thresholds:
-        # Very low (< 2%) = no signature or tiny dot (not valid sig)
-        # Medium (2-10%) = likely real signature
-        # High (> 12%) = probably printed text or overlapping elements
-        
-        if ink_density < 0.02:
-            # Too sparse - blank or just a dot, not a real signature
-            return False, 0.92
-        elif 0.02 <= ink_density <= 0.10:
-            # Good signature range
-            confidence = 0.88 if 0.025 <= ink_density <= 0.07 else 0.72
+        ink = a[top:bottom, left:right] < DARK_THRESHOLD
+        ink[ink.mean(axis=1) > 0.5, :] = False                       # horizontal form rules
+        t0, t1 = int(height * NAME_TOP) - top, int(height * NAME_BOTTOM) - top
+        ink[max(t0, 0):max(t1, 0), : max(int(width * NAME_RIGHT) - left, 0)] = False   # printed "by Name Role"
+        ink_density = float(ink.mean())
+
+        # Thresholds calibrated 2026-08-21 on 2,000 tickets: unsigned p95 = 0.0068,
+        # signed p5 = 0.0119, p50 = 0.028, p95 = 0.057.
+        if ink_density < SIG_MIN_DENSITY:
+            return False, 0.92                      # blank, a dot, or a stray mark
+        elif ink_density <= SIG_MAX_DENSITY:
+            confidence = 0.88 if 0.012 <= ink_density <= 0.04 else 0.72
             return True, confidence
         else:
-            # High density - could be signature or printed content
-            return True, 0.55
+            return True, 0.55                       # very dense: overlapping print or scribble-out

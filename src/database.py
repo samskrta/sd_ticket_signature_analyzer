@@ -25,6 +25,7 @@ class AuditRecord:
     has_legal_text: bool
     sd_tech_code: str | None = None   # authoritative tech from ServiceDesk
     ocr_name: str | None = None       # original OCR'd name, kept for diagnostics
+    customer: str | None = None       # "NAME · STREET" from ServiceDesk, for repeat-customer comparison
 
 
 class AuditDatabase:
@@ -65,7 +66,7 @@ class AuditDatabase:
             """)
             # Migrations: columns added after the initial schema
             existing = {row[1] for row in conn.execute("PRAGMA table_info(audit_records)")}
-            for col in ("sd_tech_code", "ocr_name"):
+            for col in ("sd_tech_code", "ocr_name", "customer"):
                 if col not in existing:
                     conn.execute(f"ALTER TABLE audit_records ADD COLUMN {col} TEXT")
     
@@ -171,7 +172,28 @@ class AuditDatabase:
             has_legal_text=bool(row["has_legal_text"]),
             sd_tech_code=row["sd_tech_code"],
             ocr_name=row["ocr_name"],
+            customer=row["customer"],
         )
+
+    def assign_customers(self, assignments: list[tuple[str, str]]):
+        """Set customer ("NAME · STREET") per ticket number."""
+        with self._connect() as conn:
+            conn.executemany(
+                "UPDATE audit_records SET customer = ? WHERE ticket_number = ?",
+                [(customer, ticket) for ticket, customer in assignments],
+            )
+
+    def get_signed_with_customer(self) -> list[AuditRecord]:
+        """Signed tickets that have a customer, one row per job (first variant)."""
+        with self._connect() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM audit_records
+                WHERE has_signature = 1 AND customer IS NOT NULL
+                GROUP BY ticket_number
+                HAVING variant = MIN(variant)
+                ORDER BY customer, month_folder, ticket_number
+            """)
+            return [self._row_to_record(row) for row in cursor]
 
     def get_ticket_keys(self) -> list[tuple[str, str, str]]:
         """(file_path, ticket_number, variant) for every record."""

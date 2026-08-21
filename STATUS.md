@@ -12,6 +12,9 @@ _Last updated: 2026-08-21 (project resurrected after ~6 months idle)_
 - `audit.db` stores `file_path` relative to the project dir. 2026-01 rows still point at the old absolute
   `tickets/Tckts/...` path (images not on disk) — stats work, but the review app can't show that month's images.
 - Review app `/stats`: % signed per tech (ranked bars) + tech × month heatmap, with a month-range filter. Techs with no tickets in the latest month are hidden by default (`?all=1` shows them). Remote-only techs (`NO_SIGNATURE_CODES` in tech_names.py: DK/Darrin S) are always excluded.
+- Review app `/customers`: repeat customers' signatures side by side (cross-tech first) — the one fraud check with
+  real discriminating power. Automated passes (look-alike clustering, trivial-mark rate, email-vs-visit-end timing)
+  found no tech-level signal; see session notes 2026-08-21. The audit's real finding is non-collection, not forgery.
 - Review app takes `?month=YYYY-MM` (defaults to latest month in DB); nav links carry it through.
 - `run_batch.sh` — analyzes every month under `dataIn/` that has unprocessed tickets; safe to re-run.
   Batch over 2026-03..08 launched 2026-08-21 (~0.23 s/ticket ≈ 55 min).

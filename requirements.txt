@@ -24,3 +24,4 @@ flask>=3.0.0
 
 # ServiceDesk mirror lookup (resolve_techs.py)
 psycopg[binary]>=3.1
+numpy>=1.26

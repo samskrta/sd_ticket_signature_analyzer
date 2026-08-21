@@ -30,10 +30,12 @@ def current_month() -> str:
         return requested
     return months[-1] if months else ""
 
-# Signature region as percentages (matches ticket_analyzer.py)
+# Signature region as percentages of the page, for display crops.
+# Form geometry (two layouts, 1004/1012 px tall): the "by [Tech]" rule is at 78.5–79.1%,
+# the signature baseline at 93.5–94.3%, and the "Total Ticket" box starts at ~70% width.
 SIG_LEFT = 0.0
-SIG_RIGHT = 0.45
-SIG_TOP = 0.82
+SIG_RIGHT = 0.68
+SIG_TOP = 0.77
 SIG_BOTTOM = 0.94
 
 # Store review results in memory
@@ -935,6 +937,7 @@ STATS_TEMPLATE = """
         <div class="nav-links">
             <a href="/?month={{ months[-1] }}">← Review Detection</a>
             <a href="/techs?month={{ months[-1] }}">Signature Gallery</a>
+            <a href="/customers">Repeat Customers</a>
         </div>
     </div>
 
@@ -1085,6 +1088,108 @@ def stats():
     )
 
 
+CUSTOMERS_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Repeat Customers</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif; background: #0a0a0f; color: #e0e0e0; }
+        .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 24px 40px; border-bottom: 1px solid #2a2a4a; }
+        h1 { font-size: 28px; font-weight: 600; color: #fff; }
+        .subtitle { color: #888; margin-top: 8px; font-size: 14px; max-width: 900px; line-height: 1.5; }
+        .nav-links { margin-top: 12px; }
+        .nav-links a { color: #60a5fa; text-decoration: none; margin-right: 16px; font-size: 14px; }
+        .nav-links a:hover { text-decoration: underline; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 32px; }
+        .filters { display: flex; gap: 16px; align-items: center; margin-bottom: 24px; font-size: 14px; color: #9a9aa8; }
+        .filters a { color: #60a5fa; text-decoration: none; padding: 6px 12px; border: 1px solid #2a2a3a; border-radius: 6px; }
+        .filters a.on { background: #1c5cab; color: #fff; border-color: #1c5cab; }
+        .group { background: #12121a; border: 1px solid #2a2a3a; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
+        .group.cross { border-color: #3a4a7a; }
+        .group h2 { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+        .group .addr { font-size: 12px; color: #666; margin-bottom: 12px; }
+        .group .tag { font-size: 11px; color: #9ec5f4; background: #1c2b4a; border-radius: 4px; padding: 2px 8px; margin-left: 8px; vertical-align: middle; }
+        .sigs { display: flex; flex-wrap: wrap; gap: 12px; }
+        .sig { background: #fff; border-radius: 8px; overflow: hidden; width: 300px; cursor: pointer; }
+        .sig img { width: 100%; height: 80px; object-fit: contain; display: block; }
+        .sig .cap { background: #1a1a24; color: #c3c2b7; font-size: 12px; padding: 6px 10px; display: flex; justify-content: space-between; }
+        .sig .cap b { color: #fff; }
+        .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 1000; justify-content: center; align-items: center; }
+        .modal.active { display: flex; }
+        .modal img { max-width: 95%; max-height: 95%; background: #fff; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Repeat Customers</h1>
+        <p class="subtitle">Customers with signed tickets on more than one job, side by side. A person signs about the same way regardless of who's standing there — so a customer whose signature under one tech looks nothing like their signature under another is a lead worth a second look. Same-tech repeats are the consistency baseline.</p>
+        <div class="nav-links">
+            <a href="/stats">Compliance Stats</a>
+            <a href="/techs">Signature Gallery</a>
+            <a href="/">Review Detection</a>
+        </div>
+    </div>
+    <div class="container">
+        <div class="filters">
+            <a href="/customers?mode=cross" class="{% if mode == 'cross' %}on{% endif %}">Different techs ({{ n_cross }})</a>
+            <a href="/customers?mode=same" class="{% if mode == 'same' %}on{% endif %}">Same tech ({{ n_same }})</a>
+            <a href="/customers?mode=all" class="{% if mode == 'all' %}on{% endif %}">All ({{ n_all }})</a>
+            <span>{{ groups|length }} customers shown, {{ n_sigs }} signatures</span>
+        </div>
+        {% for g in groups %}
+        <div class="group {% if g.cross %}cross{% endif %}">
+            <h2>{{ g.name }}{% if g.cross %}<span class="tag">{{ g.techs|length }} techs</span>{% endif %}</h2>
+            <div class="addr">{{ g.street }}</div>
+            <div class="sigs">
+                {% for r in g.records %}
+                <div class="sig" onclick="openModal('/image/{{ r.ticket_number }}/{{ r.variant }}/{{ r.month_folder }}')">
+                    <img src="/signature/{{ r.ticket_number }}/{{ r.variant }}/{{ r.month_folder }}" loading="lazy">
+                    <div class="cap"><b>{{ r.technician_name }}</b><span>{{ r.ticket_number }}{{ r.variant }} · {{ r.month_folder }}</span></div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="modal" id="modal" onclick="this.classList.remove('active')"><img id="modal-img"></div>
+    <script>
+        function openModal(src) { document.getElementById('modal-img').src = src; document.getElementById('modal').classList.add('active'); }
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route('/customers')
+def customers():
+    """Repeat customers' signatures side by side, grouped by customer."""
+    mode = request.args.get("mode", "cross")
+    by_customer: dict[str, list] = {}
+    for r in db.get_signed_with_customer():
+        if not (TICKETS_ROOT / r.month_folder / f"{r.ticket_number}{r.variant}.png").exists():
+            continue   # e.g. 2026-01 — analyzed, but the images are no longer on disk
+        by_customer.setdefault(r.customer, []).append(r)
+    groups = []
+    for customer, records in by_customer.items():
+        if len(records) < 2:
+            continue
+        techs = sorted({r.technician_name or "UNKNOWN" for r in records})
+        name, _, street = customer.partition(" · ")
+        groups.append({"name": name, "street": street, "records": records, "techs": techs, "cross": len(techs) > 1})
+    n_cross = sum(1 for g in groups if g["cross"]); n_all = len(groups); n_same = n_all - n_cross
+    if mode == "cross":
+        groups = [g for g in groups if g["cross"]]
+    elif mode == "same":
+        groups = [g for g in groups if not g["cross"]]
+    groups.sort(key=lambda g: (not g["cross"], -len(g["records"]), g["name"]))
+    return render_template_string(
+        CUSTOMERS_TEMPLATE, groups=groups, mode=mode,
+        n_cross=n_cross, n_same=n_same, n_all=n_all, n_sigs=sum(len(g["records"]) for g in groups),
+    )
+
+
 if __name__ == '__main__':
     print("\n" + "="*50)
     print("  Signature Detection Review App")
@@ -1094,6 +1199,7 @@ if __name__ == '__main__':
     print("    /       - Review random sample")
     print("    /techs  - Signature gallery by technician")
     print("    /stats  - Signature compliance charts")
+    print("    /customers - Repeat customers' signatures side by side")
     print("\n  Press Ctrl+C to stop\n")
     
     app.run(host='0.0.0.0', port=5050, debug=False)

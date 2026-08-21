@@ -23,7 +23,7 @@ python resolve_techs.py                # Assign the authoritative tech from Serv
 ./run_batch.sh                         # analyze every month under dataIn/ then resolve techs
 
 # Review web app
-python review_app.py                   # http://localhost:5050 — /stats (compliance charts), /techs (galleries), / (detection review)
+python review_app.py                   # http://localhost:5050 — /stats (compliance charts), /techs (galleries), /customers (repeat customers), / (detection review)
 
 # CLI (Google Cloud mode - requires service account)
 python cli.py audit --from 2026-01-01
@@ -45,7 +45,7 @@ The system has two independent processing pipelines:
 - **`src/local_scanner.py`** - Scans `YYYY-MM/` folders for PNG files matching pattern `{ticket_number}{variant}.png` (e.g., `583239a.png`). The `tickets` symlink points to the actual ticket images.
 - **`src/ticket_analyzer.py`** - Core analysis engine. Extracts tech names from a specific image region (~78-82% down, left half) using Tesseract OCR (`--psm 7`). Detects signatures via ink density in a separate region (~82-94% down, left 45%). Returns `TicketAnalysis` dataclass.
 - **`src/database.py`** - SQLite wrapper (`audit.db`). `AuditRecord` dataclass. Uses `INSERT OR REPLACE` keyed on `file_path`. Has reporting queries for stats by technician, month, and cross-tabulated.
-- **`resolve_techs.py`** - Sets `technician_name` / `sd_tech_code` from ServiceDesk (Supabase mirror, `SD_DATABASE_URL` in `.env`). Parses `jobs.work_history` lines like `SZ there ... [Tckts\605070a.png]` to map each ticket *variant* to the tech who emailed it; falls back to appointment order. The OCR'd name is preserved in `ocr_name`. This is the authoritative identity — OCR alone mis-attributed ~9% and missed ~12% (two Dereks, two Austins, Sal Z → Ali Z).
+- **`resolve_techs.py`** - Sets `technician_name` / `sd_tech_code` and `customer` ("NAME · STREET", location else payer) from ServiceDesk (Supabase mirror, `SD_DATABASE_URL` in `.env`). Parses `jobs.work_history` lines like `SZ there ... [Tckts\605070a.png]` to map each ticket *variant* to the tech who emailed it; falls back to appointment order. The OCR'd name is preserved in `ocr_name`. This is the authoritative identity — OCR alone mis-attributed ~9% and missed ~12% (two Dereks, two Austins, Sal Z → Ali Z).
 - **`src/tech_names.py`** - `TECH_CODES` (SD 2-letter code → "First L" display name — add new hires here) + OCR fallback: `KNOWN_TECHS` list, `OCR_CORRECTIONS` dict, fuzzy matching (65% threshold via `SequenceMatcher`).
 - **`review_app.py`** - Flask app (port 5050) with inline HTML templates. Two modes: detection review (balanced random sample, correct/incorrect voting) and signature gallery by technician (fraud detection). Signature region constants (`SIG_TOP`, `SIG_BOTTOM`, etc.) must stay in sync with `ticket_analyzer.py`.
 
@@ -58,17 +58,14 @@ The system has two independent processing pipelines:
 
 ## Key Detection Parameters
 
-Signature detection thresholds in `src/ticket_analyzer.py` (`_detect_signature_universal`):
+Signature detection in `src/ticket_analyzer.py` (`_detect_signature_universal`), constants at the top of the module:
+- Region: y=77–94%, x=1–68% of the page (the form's signature area: "by [Tech]" rule at 78.5–79.1%, baseline at 93.5–94.3%, "Total Ticket" box from ~70% width). Horizontal form rules (rows >50% dark) and the printed "by Name Role" block (y=78.5–81.5%, x<30%) are masked before measuring ink.
 - Dark pixel threshold: 170 (grayscale)
-- Ink density < 2%: no signature
-- Ink density 2-10%: signature detected (confidence 0.72-0.88)
-- Ink density > 12%: signature detected but lower confidence (0.55)
+- Ink density < 0.6%: no signature; 0.6–6%: signature (confidence 0.88 in 1.2–4%, else 0.72); > 6%: signature, confidence 0.55
+- Calibrated 2026-08-21 on 2,000 tickets (unsigned p95 0.68%, signed p5 1.19%). The previous 82–94% × 0–45% region missed ~1.6% of tickets whose signature rode above the name line.
+- Tech name OCR region: y=78–82%, x=0–50% (OCR is only a fallback — `resolve_techs.py` is authoritative).
 
-Image regions (as percentage of image dimensions):
-- Tech name: y=78-82%, x=0-50%
-- Signature: y=82-94%, x=0-45%
-
-These same region percentages are duplicated in `review_app.py` as `SIG_LEFT/RIGHT/TOP/BOTTOM` constants.
+`review_app.py` duplicates the display crop as `SIG_LEFT/RIGHT/TOP/BOTTOM` — keep them in sync.
 
 ## Data Layout
 
