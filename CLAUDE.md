@@ -19,9 +19,11 @@ python analyze.py 2026-01              # Analyze a specific month (from dataIn/2
 python analyze.py 2026-01 --reprocess  # Reprocess all (clears existing)
 python analyze.py --stats              # Show stats from audit.db
 python analyze.py --sample 10          # Sample 10 random tickets
+python resolve_techs.py                # Assign the authoritative tech from ServiceDesk (run after analyze)
+./run_batch.sh                         # analyze every month under dataIn/ then resolve techs
 
 # Review web app
-python review_app.py                   # Starts on http://localhost:5050
+python review_app.py                   # http://localhost:5050 — /stats (compliance charts), /techs (galleries), / (detection review)
 
 # CLI (Google Cloud mode - requires service account)
 python cli.py audit --from 2026-01-01
@@ -43,7 +45,8 @@ The system has two independent processing pipelines:
 - **`src/local_scanner.py`** - Scans `YYYY-MM/` folders for PNG files matching pattern `{ticket_number}{variant}.png` (e.g., `583239a.png`). The `tickets` symlink points to the actual ticket images.
 - **`src/ticket_analyzer.py`** - Core analysis engine. Extracts tech names from a specific image region (~78-82% down, left half) using Tesseract OCR (`--psm 7`). Detects signatures via ink density in a separate region (~82-94% down, left 45%). Returns `TicketAnalysis` dataclass.
 - **`src/database.py`** - SQLite wrapper (`audit.db`). `AuditRecord` dataclass. Uses `INSERT OR REPLACE` keyed on `file_path`. Has reporting queries for stats by technician, month, and cross-tabulated.
-- **`src/tech_names.py`** - Name normalization. `KNOWN_TECHS` list + `OCR_CORRECTIONS` dict for manual fixes + fuzzy matching (65% threshold via `SequenceMatcher`).
+- **`resolve_techs.py`** - Sets `technician_name` / `sd_tech_code` from ServiceDesk (Supabase mirror, `SD_DATABASE_URL` in `.env`). Parses `jobs.work_history` lines like `SZ there ... [Tckts\605070a.png]` to map each ticket *variant* to the tech who emailed it; falls back to appointment order. The OCR'd name is preserved in `ocr_name`. This is the authoritative identity — OCR alone mis-attributed ~9% and missed ~12% (two Dereks, two Austins, Sal Z → Ali Z).
+- **`src/tech_names.py`** - `TECH_CODES` (SD 2-letter code → "First L" display name — add new hires here) + OCR fallback: `KNOWN_TECHS` list, `OCR_CORRECTIONS` dict, fuzzy matching (65% threshold via `SequenceMatcher`).
 - **`review_app.py`** - Flask app (port 5050) with inline HTML templates. Two modes: detection review (balanced random sample, correct/incorrect voting) and signature gallery by technician (fraud detection). Signature region constants (`SIG_TOP`, `SIG_BOTTOM`, etc.) must stay in sync with `ticket_analyzer.py`.
 
 ### Google Cloud pipeline (original design, in `src/`)

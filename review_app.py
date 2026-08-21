@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.database import AuditDatabase
+from src.tech_names import NO_SIGNATURE_CODES, name_for_code
 
 # Root folder containing YYYY-MM subfolders of ticket PNGs (keep in sync with analyze.py)
 TICKETS_ROOT = Path(os.environ.get("TICKETS_ROOT", Path(__file__).parent / "dataIn"))
@@ -293,6 +294,10 @@ HTML_TEMPLATE = """
             <div class="stat">
                 <span class="stat-label">Accuracy:</span>
                 <span class="stat-value" id="accuracy">-</span>
+            </div>
+            <div class="stat" style="margin-left:auto">
+                <a href="/techs?month={{ month }}" style="color:#60a5fa;text-decoration:none">Signature Gallery</a>
+                <a href="/stats" style="color:#60a5fa;text-decoration:none;margin-left:16px">Compliance Stats</a>
             </div>
         </div>
     </div>
@@ -778,6 +783,7 @@ TECHS_TEMPLATE = """
         <p class="subtitle">Click a technician to view all their collected signatures</p>
         <div class="nav-links">
             <a href="/?month={{ month }}">← Review Detection</a>
+            <a href="/stats">Compliance Stats</a>
         </div>
     </div>
     
@@ -863,6 +869,222 @@ def get_signature(ticket_num, variant, month):
     return Response(buf.getvalue(), mimetype='image/png')
 
 
+STATS_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Signature Compliance</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --surface: #0a0a0f; --surface-2: #12121a; --border: #2a2a3a;
+            --text: #e0e0e0; --text-2: #9a9aa8; --text-3: #666;
+            --bar: #3987e5; --track: #1c1c28; --link: #60a5fa;
+        }
+        body { font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--surface); color: var(--text); }
+        .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 24px 40px; border-bottom: 1px solid #2a2a4a; }
+        h1 { font-size: 28px; font-weight: 600; color: #fff; }
+        h2 { font-size: 16px; font-weight: 600; color: #fff; margin: 0 0 4px; }
+        .subtitle { color: #888; margin-top: 8px; font-size: 14px; }
+        .nav-links { margin-top: 12px; }
+        .nav-links a { color: var(--link); text-decoration: none; margin-right: 16px; font-size: 14px; }
+        .nav-links a:hover { text-decoration: underline; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 32px; }
+        .filters { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; font-size: 14px; color: var(--text-2); }
+        .filters select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 14px; }
+        .filters button { background: var(--bar); color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font-size: 14px; cursor: pointer; }
+        .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 32px; }
+        .tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; }
+        .tile .v { font-size: 28px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+        .tile .l { font-size: 12px; color: var(--text-3); margin-top: 4px; }
+        .card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; }
+        .card .note { font-size: 12px; color: var(--text-3); margin-bottom: 16px; }
+
+        /* ranked bar chart: one row per tech, label | track | value */
+        .bars { display: grid; grid-template-columns: 110px 1fr 120px; row-gap: 6px; column-gap: 12px; align-items: center; font-size: 13px; }
+        .bars .name { color: var(--text); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bars .name a { color: inherit; text-decoration: none; }
+        .bars .name a:hover { text-decoration: underline; }
+        .bars .track { position: relative; height: 10px; background: var(--track); border-radius: 4px; cursor: default; }
+        .bars .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--bar); border-radius: 0 4px 4px 0; }
+        .bars .fill.low-n { opacity: 0.45; background: repeating-linear-gradient(135deg, var(--bar) 0 4px, transparent 4px 8px); }
+        .bars .val { color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .bars .val span { color: var(--text-3); }
+        .axis { display: grid; grid-template-columns: 110px 1fr 120px; column-gap: 12px; font-size: 11px; color: var(--text-3); margin-bottom: 6px; }
+        .axis .ticks { display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
+
+        /* heatmap */
+        .heat { border-collapse: separate; border-spacing: 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+        .heat th { color: var(--text-3); font-weight: 500; padding: 4px 6px; text-align: center; }
+        .heat th.row { text-align: right; white-space: nowrap; color: var(--text); }
+        .heat th.row a { color: inherit; text-decoration: none; }
+        .heat td { width: 64px; height: 28px; text-align: center; border-radius: 4px; cursor: default; }
+        .heat td.empty { background: transparent; color: var(--text-3); }
+        .heat td.low-n { opacity: 0.5; font-style: italic; }
+        .scale { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); margin-top: 12px; }
+        .scale .sw { width: 22px; height: 12px; border-radius: 2px; }
+
+        #tip { position: fixed; pointer-events: none; background: #1e1e2c; color: var(--text); border: 1px solid #3a3a4e; border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.5; display: none; z-index: 10; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+        #tip b { color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Signature Compliance</h1>
+        <p class="subtitle">Share of service tickets carrying a customer signature, by technician</p>
+        <div class="nav-links">
+            <a href="/?month={{ months[-1] }}">← Review Detection</a>
+            <a href="/techs?month={{ months[-1] }}">Signature Gallery</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <form class="filters" method="get">
+            <label>From <select name="from">{% for m in all_months %}<option value="{{ m }}" {% if m == month_from %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></label>
+            <label>To <select name="to">{% for m in all_months %}<option value="{{ m }}" {% if m == month_to %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></label>
+            <button type="submit">Apply</button>
+            {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+            {% if hidden %}
+            <span style="margin-left:auto">
+                {% if show_all %}Including {{ hidden|length }} former techs with no tickets in {{ latest }} · <a href="/stats?from={{ month_from }}&to={{ month_to }}" style="color:var(--link)">hide</a>
+                {% else %}{{ hidden|length }} former techs with no tickets in {{ latest }} hidden · <a href="/stats?from={{ month_from }}&to={{ month_to }}&all=1" style="color:var(--link)">show</a>{% endif %}
+                {% if excluded %} · {{ excluded|join(', ') }} excluded (remote visits, no signature expected){% endif %}
+            </span>
+            {% endif %}
+        </form>
+
+        <div class="tiles">
+            <div class="tile"><div class="v">{{ overall.rate }}%</div><div class="l">signed overall</div></div>
+            <div class="tile"><div class="v">{{ "{:,}".format(overall.total) }}</div><div class="l">tickets</div></div>
+            <div class="tile"><div class="v">{{ "{:,}".format(overall.missing) }}</div><div class="l">missing signature</div></div>
+            <div class="tile"><div class="v">{{ techs|length }}</div><div class="l">technicians</div></div>
+        </div>
+
+        <div class="card">
+            <h2>% signed by technician</h2>
+            <div class="note">Sorted worst → best. Hatched bars have fewer than {{ low_n }} tickets in range — treat as noise.</div>
+            <div class="axis"><div></div><div class="ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><div></div></div>
+            <div class="bars">
+                {% for t in techs %}
+                <div class="name"><a href="/techs/{{ t.name|urlencode }}?month={{ months[-1] }}">{{ t.name }}</a></div>
+                <div class="track" data-tip="<b>{{ t.name }}</b><br>{{ t.signed }} signed / {{ t.total - t.signed }} missing<br>{{ t.total }} tickets, {{ month_from }} – {{ month_to }}">
+                    <div class="fill {% if t.total < low_n %}low-n{% endif %}" style="width: {{ t.rate }}%"></div>
+                </div>
+                <div class="val">{{ t.rate }}% <span>· n={{ t.total }}</span></div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>% signed by technician and month</h2>
+            <div class="note">Same order as above. Darker = lower. Italic cells have fewer than {{ low_n_cell }} tickets that month.</div>
+            <div style="overflow-x: auto">
+            <table class="heat">
+                <tr><th></th>{% for m in months %}<th>{{ m[2:] }}</th>{% endfor %}</tr>
+                {% for t in techs %}
+                <tr>
+                    <th class="row"><a href="/techs/{{ t.name|urlencode }}?month={{ months[-1] }}">{{ t.name }}</a></th>
+                    {% for c in t.cells %}
+                    {% if c %}
+                    <td class="{% if c.total < low_n_cell %}low-n{% endif %}" style="background: {{ c.bg }}; color: {{ c.fg }}"
+                        data-tip="<b>{{ t.name }} · {{ c.month }}</b><br>{{ c.rate }}% signed<br>{{ c.signed }} of {{ c.total }} tickets">{{ c.rate }}</td>
+                    {% else %}
+                    <td class="empty">–</td>
+                    {% endif %}
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </table>
+            </div>
+            <div class="scale">0%{% for sw in ramp %}<span class="sw" style="background: {{ sw }}"></span>{% endfor %}100%</div>
+        </div>
+    </div>
+    <div id="tip"></div>
+    <script>
+        const tip = document.getElementById('tip');
+        document.querySelectorAll('[data-tip]').forEach(el => {
+            el.addEventListener('mouseenter', () => { tip.innerHTML = el.dataset.tip; tip.style.display = 'block'; });
+            el.addEventListener('mousemove', e => {
+                const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+                tip.style.left = x + 'px'; tip.style.top = (e.clientY + 14) + 'px';
+            });
+            el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+        });
+    </script>
+</body>
+</html>
+"""
+
+# Sequential blue ramp (dataviz reference palette, steps 700 → 100) for the heatmap on the dark surface:
+# low % signed sits near the surface, high % signed is light. Text flips to dark ink on the light steps.
+HEAT_RAMP = ["#0d366b", "#104281", "#184f95", "#1c5cab", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"]
+LOW_N_TECH = 20   # fewer tickets than this in range → hatched bar
+LOW_N_CELL = 10   # fewer tickets than this in a month → italic cell
+
+
+def heat_color(rate: float) -> tuple[str, str]:
+    idx = min(len(HEAT_RAMP) - 1, int(rate / 100 * len(HEAT_RAMP)))
+    bg = HEAT_RAMP[idx]
+    fg = "#0b0b0b" if idx >= 6 else "#ffffff"
+    return bg, fg
+
+
+@app.route('/stats')
+def stats():
+    """Signature compliance: ranked bars per tech + tech × month heatmap."""
+    all_months = [m["month_folder"] for m in db.get_signature_stats_by_month()]
+    if not all_months:
+        return "No data", 404
+    month_from = request.args.get("from") if request.args.get("from") in all_months else all_months[0]
+    month_to = request.args.get("to") if request.args.get("to") in all_months else all_months[-1]
+    if month_from > month_to:
+        month_from, month_to = month_to, month_from
+    months = [m for m in all_months if month_from <= m <= month_to]
+
+    rows = db.get_tech_month_counts(month_from, month_to)
+    by_tech: dict[str, dict] = {}
+    for r in rows:
+        t = by_tech.setdefault(r["technician"], {"name": r["technician"], "total": 0, "signed": 0, "months": {}})
+        t["total"] += r["total"]; t["signed"] += r["signed"]
+        t["months"][r["month_folder"]] = r
+
+    techs = []
+    for t in by_tech.values():
+        t["rate"] = round(100 * t["signed"] / t["total"], 1) if t["total"] else 0
+        cells = []
+        for m in months:
+            r = t["months"].get(m)
+            if not r:
+                cells.append(None); continue
+            rate = round(100 * r["signed"] / r["total"]) if r["total"] else 0
+            bg, fg = heat_color(rate)
+            cells.append({"month": m, "rate": rate, "total": r["total"], "signed": r["signed"], "bg": bg, "fg": fg})
+        t["cells"] = cells
+        techs.append(t)
+    techs.sort(key=lambda t: (t["rate"], -t["total"]))
+
+    # Former techs: nobody with zero tickets in the latest month belongs on the chart.
+    latest = all_months[-1]
+    active_names = {r["technician"] for r in db.get_tech_month_counts(latest, latest)}
+    show_all = request.args.get("all") == "1"
+    hidden = [t["name"] for t in techs if t["name"] not in active_names]
+    if not show_all:
+        techs = [t for t in techs if t["name"] in active_names]
+    # Remote-only techs never collect a signature — never on the chart, even with ?all=1.
+    no_sig_names = {name_for_code(c) for c in NO_SIGNATURE_CODES}
+    excluded = [t["name"] for t in techs if t["name"] in no_sig_names]
+    techs = [t for t in techs if t["name"] not in no_sig_names]
+
+    total = sum(t["total"] for t in techs); signed = sum(t["signed"] for t in techs)
+    overall = {"total": total, "missing": total - signed, "rate": round(100 * signed / total, 1) if total else 0}
+    return render_template_string(
+        STATS_TEMPLATE, techs=techs, months=months, all_months=all_months,
+        month_from=month_from, month_to=month_to, overall=overall,
+        ramp=HEAT_RAMP, low_n=LOW_N_TECH, low_n_cell=LOW_N_CELL,
+        latest=latest, hidden=hidden, show_all=show_all, excluded=excluded,
+    )
+
+
 if __name__ == '__main__':
     print("\n" + "="*50)
     print("  Signature Detection Review App")
@@ -871,6 +1093,7 @@ if __name__ == '__main__':
     print("  Routes:")
     print("    /       - Review random sample")
     print("    /techs  - Signature gallery by technician")
+    print("    /stats  - Signature compliance charts")
     print("\n  Press Ctrl+C to stop\n")
     
     app.run(host='0.0.0.0', port=5050, debug=False)

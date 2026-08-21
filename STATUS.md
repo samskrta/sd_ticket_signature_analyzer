@@ -11,11 +11,18 @@ _Last updated: 2026-08-21 (project resurrected after ~6 months idle)_
   Note: `2026-03.zip` extracted as a wrapper folder holding all six months — flattened 2026-08-21.
 - `audit.db` stores `file_path` relative to the project dir. 2026-01 rows still point at the old absolute
   `tickets/Tckts/...` path (images not on disk) — stats work, but the review app can't show that month's images.
+- Review app `/stats`: % signed per tech (ranked bars) + tech × month heatmap, with a month-range filter. Techs with no tickets in the latest month are hidden by default (`?all=1` shows them). Remote-only techs (`NO_SIGNATURE_CODES` in tech_names.py: DK/Darrin S) are always excluded.
 - Review app takes `?month=YYYY-MM` (defaults to latest month in DB); nav links carry it through.
 - `run_batch.sh` — analyzes every month under `dataIn/` that has unprocessed tickets; safe to re-run.
   Batch over 2026-03..08 launched 2026-08-21 (~0.23 s/ticket ≈ 55 min).
 
 ## Fixed this session (2026-08-21)
+
+- **Tech identity now comes from ServiceDesk, not OCR.** `resolve_techs.py` maps each ticket image to the tech
+  named in SD `work_history` (99.97% resolved). Added `sd_tech_code` + `ocr_name` columns. Findings: OCR was wrong
+  on 1,378 tickets and blank on 1,826 — "Derek F" was two people (DR Frenzel + DI Irvin), "Austin L" was two
+  (AR Rutenschroer + RL Loncke), Sal Z's tickets were filed under Ali Z, and Addy N / Owen L / Tyke B were missing.
+- Batch of 2026-03..08 (14,042 tickets) OCR'd in parallel, counts verified against disk.
 
 - Rebuilt `venv/` (old one pointed at a Homebrew Python 3.14.0 that was upgraded; pip refused with PEP 668).
 - Added `pytesseract` and `flask` to `requirements.txt` — they were never listed, only installed by hand.
@@ -25,9 +32,10 @@ _Last updated: 2026-08-21 (project resurrected after ~6 months idle)_
 
 1. **Ticket source**: currently zip exports dropped into `dataIn/`. Fine for now; automate later if needed.
 2. The review app has no month picker UI yet — only the `?month=` query string.
-3. **UNKNOWN tech bucket** is the largest (170 tickets, mostly signed) — OCR misses on the name region.
-4. **Zero-signature techs** (Derek F 2.7%, Travis M 3.1%, Darrin S 0/38) — either real non-compliance or a
-   form-layout difference the detector doesn't handle. Needs eyeballing in the review app before reporting.
+3. **Near-zero signature techs** (Darrin S/DK 0%, Derek F/DR 0.5%, Derek I/DI 0.7%, Travis M 1.6%) — identity is
+   now confirmed from SD, so this is either real non-signing or a layout the detector misses. Eyeball in
+   `/techs/Derek%20F?month=2026-07` before reporting.
+4. `DK` (Darrin S) and `TB` (Tyke B) aren't in rossware-sync's `tech_commission.json` — names taken from ticket text.
 5. `audit.db` is untracked — decide whether to commit it (it's the only record of the 2026-01 analysis) or gitignore.
    Zips and `dataIn/` are gitignored now.
 

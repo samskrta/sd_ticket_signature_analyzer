@@ -24,8 +24,65 @@ OCR_CORRECTIONS = {
     "Chance I": "Chance H",
 }
 
+# ServiceDesk technician codes → display name ("First L"). This is the
+# authoritative identity; OCR names are only a fallback. Source: ServiceDesk
+# appointments / work_history, cross-checked against rossware-sync's
+# tech_commission.json roster (2026-08-21).
+TECH_CODES = {
+    "AB": "Anthony B",   # Anthony Bellmer
+    "AD": "Addy N",      # Addyson Nelson
+    "AI": "Derek I",     # 1 ticket in 2026-08; image reads "by Derek I" — alias of DI
+    "AR": "Austin R",    # Austin Rutenschroer (OCR merged into "Austin L")
+    "AZ": "Ali Z",       # Ali Zangeneh
+    "BC": "Brian C",     # Brian Connolly
+    "BK": "Bryce K",     # Bryce Kopf
+    "CD": "Chuck D",     # Chuck Dalton
+    "CH": "Chance H",    # Chance Holcer
+    "CR": "Cole R",      # Cole Rudeen
+    "CS": "Chris S",     # Chris Statham
+    "DI": "Derek I",     # Derek Irvin (OCR merged into "Derek F")
+    "DK": "Darrin S",    # not in commission roster; OCR reads "Darrin S" 219/219
+    "DN": "Darren B",    # Darren Bitzer
+    "DR": "Derek F",     # Derek Frenzel
+    "EC": "Eric C",      # Eric Cardwell
+    "JL": "Jacob L",     # Jacob Loncke
+    "JY": "Jimmy Y",     # Jimmy Young
+    "KB": "Kelvin B",    # Kelvin Blessing
+    "KH": "Koby H",      # Koby Ham
+    "KY": "Ky S",        # Ky Sage
+    "LA": "Lucas H",     # Lucas Hinton
+    "MF": "Mark F",      # Mark Fleming
+    "MM": "Michael M",   # Mike Marnik
+    "MP": "Mike F",      # Mike Fleming
+    "NF": "Nick F",      # Nick Farrow
+    "OL": "Owen L",      # Owen L — started 2026-08
+    "RL": "Austin L",    # Austin Loncke
+    "RT": "Rory T",      # Rory Tierney
+    "SG": "Shannon G",   # Shannon Goedde
+    "SZ": "Sal Z",       # Sal Z — started 2026-06 (OCR merged into "Ali Z")
+    "TB": "Tyke B",      # not in commission roster; ticket prints "by Tyke B Ctec"
+    "TM": "Travis M",    # Travis Moulder
+}
+
+
+# Techs whose work never produces a customer signature — excluded from compliance
+# charts so they don't drag the numbers down for a reason that isn't non-compliance.
+NO_SIGNATURE_CODES = {
+    "DK",   # Darrin S — remote/virtual visits only
+}
+
+
+def name_for_code(code: str | None) -> str | None:
+    """Display name for a ServiceDesk tech code; falls back to the code itself."""
+    if not code:
+        return None
+    code = code.upper()
+    return TECH_CODES.get(code, code)
+
+
 # Known good technician names (first name + last initial)
 KNOWN_TECHS = [
+    "Addy N",
     "Ali Z",
     "Anthony A",
     "Anthony B",
@@ -46,7 +103,9 @@ KNOWN_TECHS = [
     "Michael M",
     "Mike F",
     "Nick F",
+    "Owen L",
     "Rory T",
+    "Sal Z",
     "Shannon G",
     "Travis M",
 ]

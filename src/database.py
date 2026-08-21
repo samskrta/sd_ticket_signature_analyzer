@@ -23,6 +23,8 @@ class AuditRecord:
     ticket_date: str | None
     audit_date: datetime
     has_legal_text: bool
+    sd_tech_code: str | None = None   # authoritative tech from ServiceDesk
+    ocr_name: str | None = None       # original OCR'd name, kept for diagnostics
 
 
 class AuditDatabase:
@@ -61,6 +63,11 @@ class AuditDatabase:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_ticket ON audit_records(ticket_number)
             """)
+            # Migrations: columns added after the initial schema
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(audit_records)")}
+            for col in ("sd_tech_code", "ocr_name"):
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE audit_records ADD COLUMN {col} TEXT")
     
     @contextmanager
     def _connect(self):
@@ -162,7 +169,32 @@ class AuditDatabase:
             ticket_date=row["ticket_date"],
             audit_date=datetime.fromisoformat(row["audit_date"]),
             has_legal_text=bool(row["has_legal_text"]),
+            sd_tech_code=row["sd_tech_code"],
+            ocr_name=row["ocr_name"],
         )
+
+    def get_ticket_keys(self) -> list[tuple[str, str, str]]:
+        """(file_path, ticket_number, variant) for every record."""
+        with self._connect() as conn:
+            cursor = conn.execute("SELECT file_path, ticket_number, variant FROM audit_records")
+            return [(r["file_path"], r["ticket_number"], r["variant"]) for r in cursor]
+
+    def assign_technicians(self, assignments: list[tuple[str, str, str]]):
+        """
+        Set the authoritative technician on records.
+
+        assignments: (file_path, sd_tech_code, technician_name). The first
+        time a record is assigned, its OCR'd technician_name is preserved in
+        ocr_name so we can still measure OCR accuracy.
+        """
+        with self._connect() as conn:
+            conn.executemany("""
+                UPDATE audit_records
+                SET ocr_name = COALESCE(ocr_name, technician_name),
+                    sd_tech_code = ?,
+                    technician_name = ?
+                WHERE file_path = ?
+            """, [(code, name, path) for path, code, name in assignments])
     
     # === Reporting queries ===
     
@@ -224,6 +256,25 @@ class AuditDatabase:
             """)
             return [dict(row) for row in cursor]
     
+    def get_tech_month_counts(self, month_from: str | None = None, month_to: str | None = None) -> list[dict]:
+        """(technician, month_folder, total, signed) for every tech × month in the range."""
+        where, params = [], []
+        if month_from:
+            where.append("month_folder >= ?"); params.append(month_from)
+        if month_to:
+            where.append("month_folder <= ?"); params.append(month_to)
+        sql = f"""
+            SELECT COALESCE(technician_name, 'UNKNOWN') AS technician,
+                   month_folder,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN has_signature = 1 THEN 1 ELSE 0 END) AS signed
+            FROM audit_records
+            {'WHERE ' + ' AND '.join(where) if where else ''}
+            GROUP BY technician_name, month_folder
+        """
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(sql, params)]
+
     def get_total_stats(self) -> dict:
         """Get overall statistics."""
         with self._connect() as conn:

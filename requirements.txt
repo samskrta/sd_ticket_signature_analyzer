@@ -21,3 +21,6 @@ Pillow>=10.1.0
 # Local pipeline (OCR + review app)
 pytesseract>=0.3.10
 flask>=3.0.0
+
+# ServiceDesk mirror lookup (resolve_techs.py)
+psycopg[binary]>=3.1
