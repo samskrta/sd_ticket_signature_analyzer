@@ -3,12 +3,10 @@
 ## State
 Project resurrected. 15,633 tickets (2026-01→08) in audit.db; tech identity from ServiceDesk
 (99.97%), detector region fixed and recalibrated, review app has /stats and /customers.
-Re-detection batch with the new region was launched at end of session — verify it completed
-(`python analyze.py --stats`; counts per month must match `ls dataIn/<month>/*.png | wc -l`).
+Re-detection with the new region completed and was verified 2026-08-21 15:08 (counts match disk for
+all months, resolver re-ran, 4 records without an SD code). Active-tech signature rate 58.3% → 60.5%.
 
 ## Next up
-- Confirm the re-detection landed and resolve_techs ran after it (technician_name should be
-  SD names, not OCR; `select count(*) from audit_records where sd_tech_code is null` ≈ 4).
 - Eyeball /customers "Different techs" tab (143 customers) — the only fraud check with teeth.
 - Near-zero collectors are real, not detector noise: Derek F (DR), Derek I (DI), Travis M, Mike F,
   Shannon G. Ali Z drifted 67% → 0% Feb→Jul; Chuck D 94% → 50%.
