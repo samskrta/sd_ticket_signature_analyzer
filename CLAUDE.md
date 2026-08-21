@@ -15,7 +15,7 @@ pip install -r requirements.txt
 brew install tesseract  # macOS - required for local OCR
 
 # Analyze tickets (primary workflow)
-python analyze.py 2026-01              # Analyze a specific month
+python analyze.py 2026-01              # Analyze a specific month (from dataIn/2026-01/)
 python analyze.py 2026-01 --reprocess  # Reprocess all (clears existing)
 python analyze.py --stats              # Show stats from audit.db
 python analyze.py --sample 10          # Sample 10 random tickets
@@ -69,7 +69,7 @@ These same region percentages are duplicated in `review_app.py` as `SIG_LEFT/RIG
 
 ## Data Layout
 
-- Ticket images: `tickets/` symlink → Google Drive folder containing `YYYY-MM/*.png`
-- Local months also appear as `2026-02/` directories in the project root (extracted from zip exports)
+- Ticket images: `dataIn/YYYY-MM/*.png` (gitignored; drop zip exports here and extract so each month is a direct child of `dataIn/`). Override with env `TICKETS_ROOT`.
+- `audit.db` stores `file_path` relative to the project dir (e.g. `dataIn/2026-03/590897a.png`)
 - Database: `audit.db` in project root
 - Credentials: `.env` (never committed), `service_account.json` (gitignored)

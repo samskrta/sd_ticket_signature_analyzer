@@ -8,13 +8,26 @@ from pathlib import Path
 from flask import Flask, render_template_string, jsonify, request, Response
 from PIL import Image
 
+import os
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.database import AuditDatabase
 
+# Root folder containing YYYY-MM subfolders of ticket PNGs (keep in sync with analyze.py)
+TICKETS_ROOT = Path(os.environ.get("TICKETS_ROOT", Path(__file__).parent / "dataIn"))
+
 app = Flask(__name__)
 db = AuditDatabase()
+
+
+def current_month() -> str:
+    """Month being reviewed: ?month=YYYY-MM, else the latest month in the DB."""
+    months = [m["month_folder"] for m in db.get_signature_stats_by_month()]
+    requested = request.args.get("month")
+    if requested in months:
+        return requested
+    return months[-1] if months else ""
 
 # Signature region as percentages (matches ticket_analyzer.py)
 SIG_LEFT = 0.0
@@ -382,8 +395,8 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     """Show random sample of tickets for review."""
-    records = db.get_all_records()
-    
+    records = db.get_records_by_month(current_month())
+
     # Get balanced sample: some with sig, some without
     with_sig = [r for r in records if r.has_signature]
     without_sig = [r for r in records if not r.has_signature]
@@ -395,18 +408,17 @@ def index():
     sample.extend(random.sample(without_sig, min(sample_size, len(without_sig))))
     random.shuffle(sample)
     
-    return render_template_string(HTML_TEMPLATE, records=sample, total=len(sample))
+    return render_template_string(HTML_TEMPLATE, records=sample, total=len(sample), month=current_month())
 
 
 @app.route('/image/<ticket_num>/<variant>/<month>')
 def get_image(ticket_num, variant, month):
     """Serve ticket image."""
-    tickets_path = Path(__file__).parent / "tickets" / "Tckts"
-    image_path = tickets_path / month / f"{ticket_num}{variant}.png"
-    
+    image_path = TICKETS_ROOT / month / f"{ticket_num}{variant}.png"
+
     if not image_path.exists():
         return "Not found", 404
-    
+
     image_data = image_path.read_bytes()
     return image_data, 200, {'Content-Type': 'image/png'}
 
@@ -611,7 +623,7 @@ GALLERY_TEMPLATE = """
 <body>
     <div class="header">
         <div>
-            <a href="/techs" class="back-link">← All Technicians</a>
+            <a href="/techs?month={{ month }}" class="back-link">← All Technicians</a>
             <h1>{{ tech_name }}</h1>
         </div>
         <div class="stats">
@@ -765,14 +777,14 @@ TECHS_TEMPLATE = """
         <h1>Technician Signature Gallery</h1>
         <p class="subtitle">Click a technician to view all their collected signatures</p>
         <div class="nav-links">
-            <a href="/">← Review Detection</a>
+            <a href="/?month={{ month }}">← Review Detection</a>
         </div>
     </div>
     
     <div class="container">
         <div class="tech-list">
             {% for tech in techs %}
-            <a href="/techs/{{ tech.name|urlencode }}" class="tech-card">
+            <a href="/techs/{{ tech.name|urlencode }}?month={{ month }}" class="tech-card">
                 <div class="tech-name">{{ tech.name or 'UNKNOWN' }}</div>
                 <div class="tech-stats">
                     <div class="sig-count">{{ tech.count }}</div>
@@ -790,7 +802,7 @@ TECHS_TEMPLATE = """
 @app.route('/techs')
 def techs_list():
     """List all technicians with signature counts."""
-    records = db.get_all_records()
+    records = db.get_records_by_month(current_month())
     
     # Count signatures per tech
     tech_counts = {}
@@ -803,13 +815,13 @@ def techs_list():
     techs = [{'name': k, 'count': v} for k, v in tech_counts.items()]
     techs.sort(key=lambda x: -x['count'])
     
-    return render_template_string(TECHS_TEMPLATE, techs=techs)
+    return render_template_string(TECHS_TEMPLATE, techs=techs, month=current_month())
 
 
 @app.route('/techs/<tech_name>')
 def tech_gallery(tech_name):
     """Show all signatures for a specific technician."""
-    records = db.get_all_records()
+    records = db.get_records_by_month(current_month())
     
     # Handle UNKNOWN
     if tech_name == "UNKNOWN" or tech_name == "None":
@@ -820,18 +832,17 @@ def tech_gallery(tech_name):
     # Sort by ticket number
     signatures.sort(key=lambda x: x.ticket_number)
     
-    return render_template_string(GALLERY_TEMPLATE, tech_name=tech_name, signatures=signatures)
+    return render_template_string(GALLERY_TEMPLATE, tech_name=tech_name, signatures=signatures, month=current_month())
 
 
 @app.route('/signature/<ticket_num>/<variant>/<month>')
 def get_signature(ticket_num, variant, month):
     """Serve cropped signature region."""
-    tickets_path = Path(__file__).parent / "tickets" / "Tckts"
-    image_path = tickets_path / month / f"{ticket_num}{variant}.png"
-    
+    image_path = TICKETS_ROOT / month / f"{ticket_num}{variant}.png"
+
     if not image_path.exists():
         return "Not found", 404
-    
+
     # Open and crop to signature region
     img = Image.open(image_path)
     width, height = img.size

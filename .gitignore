@@ -27,3 +27,8 @@ Thumbs.db
 *.log
 .env
 .playwright-mcp/
+
+# Local ticket image drops (large, not source)
+dataIn/
+*.zip
+2026-*/

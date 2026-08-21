@@ -9,6 +9,7 @@ Usage:
     python analyze.py --stats            # Show stats from database
 """
 
+import os
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -25,8 +26,14 @@ from src.database import AuditDatabase, AuditRecord
 
 console = Console()
 
-# Default tickets path
-TICKETS_PATH = Path(__file__).parent / "tickets" / "Tckts"
+# Root folder containing YYYY-MM subfolders of ticket PNGs
+PROJECT_DIR = Path(__file__).parent
+TICKETS_ROOT = Path(os.environ.get("TICKETS_ROOT", Path(__file__).parent / "dataIn"))
+
+
+def rel_path(p: Path) -> str:
+    """Store paths relative to the project so the DB survives moves/renames of the checkout."""
+    return os.path.relpath(p, PROJECT_DIR)
 
 
 def analyze_tickets(
@@ -37,7 +44,7 @@ def analyze_tickets(
 ):
     """Analyze ticket images and store results."""
     
-    scanner = LocalScanner(TICKETS_PATH)
+    scanner = LocalScanner(TICKETS_ROOT)
     analyzer = TicketAnalyzer(use_vision_api=use_vision_api)
     db = AuditDatabase()
     
@@ -57,7 +64,7 @@ def analyze_tickets(
     images: list[TicketImage] = []
     for m in months:
         for img in scanner.scan_folder(m):
-            if str(img.path) not in processed:
+            if rel_path(img.path) not in processed:
                 images.append(img)
     
     if sample_size and len(images) > sample_size:
@@ -84,7 +91,7 @@ def analyze_tickets(
                     ticket_number=img.ticket_number,
                     variant=img.variant,
                     month_folder=img.month_folder,
-                    file_path=str(img.path),
+                    file_path=rel_path(img.path),
                     technician_name=result.technician_name,
                     technician_role=result.technician_role,
                     has_signature=result.has_signature,

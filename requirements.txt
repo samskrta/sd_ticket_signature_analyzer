@@ -17,3 +17,7 @@ pydantic-settings>=2.1.0
 
 # Image processing fallback
 Pillow>=10.1.0
+
+# Local pipeline (OCR + review app)
+pytesseract>=0.3.10
+flask>=3.0.0
