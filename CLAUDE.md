@@ -16,7 +16,7 @@ brew install tesseract  # macOS - required for local OCR
 
 # Analyze tickets (primary workflow)
 python analyze.py 2026-01              # Analyze a specific month (from dataIn/2026-01/)
-python analyze.py 2026-01 --reprocess  # Reprocess all (clears existing)
+python analyze.py 2026-01 --reprocess  # Re-OCR + re-detect; INSERT OR REPLACE wipes sd_tech_code/customer — run resolve_techs.py after (run_batch.sh does)
 python analyze.py --stats              # Show stats from audit.db
 python analyze.py --sample 10          # Sample 10 random tickets
 python resolve_techs.py                # Assign the authoritative tech from ServiceDesk (run after analyze)
@@ -42,12 +42,12 @@ The system has two independent processing pipelines:
 `analyze.py` → `LocalScanner` → `TicketAnalyzer` → `AuditDatabase` (SQLite)
 
 - **`analyze.py`** - Entry point for local analysis. Uses argparse. Reads tickets from the filesystem, runs OCR + signature detection, stores results in `audit.db`.
-- **`src/local_scanner.py`** - Scans `YYYY-MM/` folders for PNG files matching pattern `{ticket_number}{variant}.png` (e.g., `583239a.png`). The `tickets` symlink points to the actual ticket images.
-- **`src/ticket_analyzer.py`** - Core analysis engine. Extracts tech names from a specific image region (~78-82% down, left half) using Tesseract OCR (`--psm 7`). Detects signatures via ink density in a separate region (~82-94% down, left 45%). Returns `TicketAnalysis` dataclass.
+- **`src/local_scanner.py`** - Scans `YYYY-MM/` folders for PNG files matching pattern `{ticket_number}{variant}.png` (e.g., `583239a.png`).
+- **`src/ticket_analyzer.py`** - Core analysis engine. Extracts tech names from a specific image region (~78-82% down, left half) using Tesseract OCR (`--psm 7`). Detects signatures via masked ink density (see Key Detection Parameters). Returns `TicketAnalysis` dataclass.
 - **`src/database.py`** - SQLite wrapper (`audit.db`). `AuditRecord` dataclass. Uses `INSERT OR REPLACE` keyed on `file_path`. Has reporting queries for stats by technician, month, and cross-tabulated.
 - **`resolve_techs.py`** - Sets `technician_name` / `sd_tech_code` and `customer` ("NAME · STREET", location else payer) from ServiceDesk (Supabase mirror, `SD_DATABASE_URL` in `.env`). Parses `jobs.work_history` lines like `SZ there ... [Tckts\605070a.png]` to map each ticket *variant* to the tech who emailed it; falls back to appointment order. The OCR'd name is preserved in `ocr_name`. This is the authoritative identity — OCR alone mis-attributed ~9% and missed ~12% (two Dereks, two Austins, Sal Z → Ali Z).
 - **`src/tech_names.py`** - `TECH_CODES` (SD 2-letter code → "First L" display name — add new hires here) + OCR fallback: `KNOWN_TECHS` list, `OCR_CORRECTIONS` dict, fuzzy matching (65% threshold via `SequenceMatcher`).
-- **`review_app.py`** - Flask app (port 5050) with inline HTML templates. Two modes: detection review (balanced random sample, correct/incorrect voting) and signature gallery by technician (fraud detection). Signature region constants (`SIG_TOP`, `SIG_BOTTOM`, etc.) must stay in sync with `ticket_analyzer.py`.
+- **`review_app.py`** - Flask app (port 5050) with inline HTML templates. Routes: `/` detection review (vote correct/incorrect), `/techs` galleries, `/stats` compliance charts (latest-month techs only; `NO_SIGNATURE_CODES` excluded), `/customers` repeat-customer comparison. Signature region constants (`SIG_TOP`, `SIG_BOTTOM`, etc.) must stay in sync with `ticket_analyzer.py`.
 
 ### Google Cloud pipeline (original design, in `src/`)
 `cli.py` → `AuditService` → `DriveClient` + `VisionAnalyzer` → `SheetsWriter`
@@ -70,6 +70,6 @@ Signature detection in `src/ticket_analyzer.py` (`_detect_signature_universal`),
 ## Data Layout
 
 - Ticket images: `dataIn/YYYY-MM/*.png` (gitignored; drop zip exports here and extract so each month is a direct child of `dataIn/`). Override with env `TICKETS_ROOT`.
-- `audit.db` stores `file_path` relative to the project dir (e.g. `dataIn/2026-03/590897a.png`)
-- Database: `audit.db` in project root
+- Database: `audit.db` in project root; `file_path` is relative to the project dir (e.g. `dataIn/2026-03/590897a.png`)
+- Months can be analyzed in parallel (one `analyze.py` per month) — each month writes once in a single transaction, no SQLite contention.
 - Credentials: `.env` (never committed), `service_account.json` (gitignored)
